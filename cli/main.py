@@ -240,6 +240,15 @@ def build_parser() -> argparse.ArgumentParser:
     v3.add_argument("--demo", action="store_true", help="Run full V3 pipeline demo")
     v3.set_defaults(func=cmd_v3_pipeline)
 
+    # export-html (HTML report generation)
+    exp = sub.add_parser("export-html", help="Export V3 verdict as standalone HTML report")
+    exp.add_argument("--demo", action="store_true", help="Generate demo report")
+    exp.add_argument("--output", default="verdict_report.html", help="Output file path")
+    exp.add_argument("--verdict-file", help="Path to verdict JSON file")
+    exp.add_argument("--profile-file", help="Path to neuro profile JSON file")
+    exp.add_argument("--hard-truth-file", help="Path to hard truth JSON file")
+    exp.set_defaults(func=cmd_export_html)
+
     return parser
 
 
@@ -660,6 +669,47 @@ def cmd_v3_pipeline(args: argparse.Namespace) -> int:
         print("\n" + generate_hard_truth_output(profile, text))
 
     return 0
+
+
+def cmd_export_html(args: argparse.Namespace) -> int:
+    """Export V3 verdict as standalone HTML report."""
+    from core.html_export import generate_verdict_html, save_html_report, DEMO_VERDICT, DEMO_PROFILE, DEMO_HARD_TRUTH
+
+    if args.demo:
+        html = generate_verdict_html(
+            verdict_data=DEMO_VERDICT,
+            profile=DEMO_PROFILE,
+            hard_truth=DEMO_HARD_TRUTH,
+            question="Is this pricing strategy competitive for Q3 launch?",
+            run_id="demo-run-001",
+        )
+        Path(args.output).write_text(html, encoding="utf-8")
+        print(f"Demo HTML report saved to {args.output}")
+        return 0
+
+    # Load files if provided
+    verdict_data = {}
+    profile = None
+    hard_truth = None
+
+    if args.verdict_file:
+        verdict_data = json.loads(Path(args.verdict_file).read_text(encoding="utf-8"))
+    else:
+        print("Error: --verdict-file required (or use --demo)", file=sys.stderr)
+        return 2
+
+    if args.profile_file:
+        profile = json.loads(Path(args.profile_file).read_text(encoding="utf-8"))
+
+    if args.hard_truth_file:
+        hard_truth = json.loads(Path(args.hard_truth_file).read_text(encoding="utf-8"))
+
+    return save_html_report(
+        output_path=args.output,
+        verdict_data=verdict_data,
+        profile=profile,
+        hard_truth=hard_truth,
+    )
 
 
 def main() -> int:
