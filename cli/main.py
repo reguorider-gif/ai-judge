@@ -24,6 +24,7 @@ Usage:
     ai-judge neuro-profile --demo     # 4 neuro-cognitive proxy signals + dual scores
     ai-judge hard-truth --demo        # L0-L4 judgment-first feedback
     ai-judge v3-pipeline --demo       # Full determinism + neuro + hard truth pipeline
+    ai-judge council --model mimo --demo  # Fixed jury seat demo (MiMo, Gemini, etc.)
 """
 
 from __future__ import annotations
@@ -239,6 +240,12 @@ def build_parser() -> argparse.ArgumentParser:
     v3 = sub.add_parser("v3-pipeline", help="V3: Run full V3 pipeline (determinism + neuro + hard truth)")
     v3.add_argument("--demo", action="store_true", help="Run full V3 pipeline demo")
     v3.set_defaults(func=cmd_v3_pipeline)
+
+    # council — fixed jury seat demo
+    coun = sub.add_parser("council", help="Run a full jury council demo for a specific model seat")
+    coun.add_argument("--model", default="mimo", help="Jury seat model (e.g. mimo, gemini, chatgpt)")
+    coun.add_argument("--demo", action="store_true", help="Run demo with synthetic data (no API keys required)")
+    coun.set_defaults(func=cmd_council)
 
     return parser
 
@@ -659,6 +666,104 @@ def cmd_v3_pipeline(args: argparse.Namespace) -> int:
     if v3_result.get("hard_truth_mode", {}).get("active"):
         print("\n" + generate_hard_truth_output(profile, text))
 
+    return 0
+
+
+def cmd_council(args: argparse.Namespace) -> int:
+    """Run a jury council demo for a specific model seat."""
+    from core.scoring_v2 import score_jury_full_pipeline
+    from core.consensus_v2 import diversity_alert_pipeline
+    from core.formula_engine import graph_value_v2
+
+    if not args.demo:
+        print("Usage: ai-judge council --model <seat> --demo", file=sys.stderr)
+        return 2
+
+    model = (args.model or "mimo").strip().lower()
+
+    seat_claims = {
+        "gemini":   {"claim": "人类的独特价值在于'负责任的不知道'——认知诚实加上行动承诺。", "source_authority": 0.83, "evidence_strength": 0.76, "evidence_count": 3, "evidence_quality": 0.80, "freshness": 0.88, "reproducibility": 0.72, "historical_reliability": 0.82, "confidence": 0.78, "risk_penalty": 0.0},
+        "chatgpt":  {"claim": "人类的独特价值在于跨领域类比——在看似无关的领域间建立全新的概念桥梁。", "source_authority": 0.85, "evidence_strength": 0.78, "evidence_count": 3, "evidence_quality": 0.82, "freshness": 0.90, "reproducibility": 0.75, "historical_reliability": 0.85, "confidence": 0.82, "risk_penalty": 0.0},
+        "deepseek": {"claim": "人类核心优势在于'提出问题的能力'——元认知层面的质疑是人类专属领域。", "source_authority": 0.90, "evidence_strength": 0.88, "evidence_count": 5, "evidence_quality": 0.92, "freshness": 0.95, "reproducibility": 0.85, "historical_reliability": 0.90, "confidence": 0.88, "risk_penalty": 0.0},
+        "qwen":     {"claim": "人类优势在于'具身认知'——思考与身体经验、情感记忆深度绑定。", "source_authority": 0.80, "evidence_strength": 0.72, "evidence_count": 4, "evidence_quality": 0.78, "freshness": 0.86, "reproducibility": 0.70, "historical_reliability": 0.80, "confidence": 0.75, "risk_penalty": 0.0},
+        "kimi":     {"claim": "人类最独特的价值是'在信息不完整时做决策的勇气'。", "source_authority": 0.82, "evidence_strength": 0.75, "evidence_count": 3, "evidence_quality": 0.79, "freshness": 0.84, "reproducibility": 0.73, "historical_reliability": 0.83, "confidence": 0.80, "risk_penalty": 0.0},
+        "grok":     {"claim": "人类价值在于拥抱不确定性并从第一性原理重新推导答案。", "source_authority": 0.78, "evidence_strength": 0.70, "evidence_count": 2, "evidence_quality": 0.74, "freshness": 0.83, "reproducibility": 0.68, "historical_reliability": 0.78, "confidence": 0.74, "risk_penalty": 0.0},
+        "yuanbao":  {"claim": "人类核心竞争力是'矛盾包容力'——同时持有对立观点并依然有效行动。", "source_authority": 0.81, "evidence_strength": 0.73, "evidence_count": 3, "evidence_quality": 0.76, "freshness": 0.85, "reproducibility": 0.71, "historical_reliability": 0.79, "confidence": 0.76, "risk_penalty": 0.0},
+        "mimo":     {"claim": "人类的不可替代性在于'创造新的评价标准'——对评价体系本身的反思和重建是人类独有的。", "source_authority": 0.84, "evidence_strength": 0.80, "evidence_count": 3, "evidence_quality": 0.83, "freshness": 0.89, "reproducibility": 0.76, "historical_reliability": 0.84, "confidence": 0.81, "risk_penalty": 0.0},
+        "doubao":   {"claim": "人类的价值在于'品味'——对'什么是好的'的直觉判断来自无法被数据化的经验总和。", "source_authority": 0.78, "evidence_strength": 0.70, "evidence_count": 2, "evidence_quality": 0.75, "freshness": 0.82, "reproducibility": 0.68, "historical_reliability": 0.77, "confidence": 0.72, "risk_penalty": 0.0},
+    }
+
+    canonical = {
+        "gemini": "Gemini", "chatgpt": "ChatGPT", "deepseek": "DeepSeek",
+        "qwen": "Qwen", "kimi": "Kimi", "grok": "Grok",
+        "yuanbao": "Yuanbao", "mimo": "MiMo", "doubao": "Doubao",
+    }
+
+    if model not in seat_claims:
+        valid = ", ".join(sorted(seat_claims.keys()))
+        print(f"Error: unknown model '{model}'. Valid seats: {valid}", file=sys.stderr)
+        return 1
+
+    seat_name = canonical[model]
+    seat_data = seat_claims[model]
+
+    seat_vectors = {
+        "Gemini":   [0.85, 0.60, 0.90, 0.75, 0.50],
+        "ChatGPT":  [0.82, 0.55, 0.88, 0.72, 0.45],
+        "DeepSeek": [0.88, 0.65, 0.92, 0.78, 0.30],
+        "Qwen":     [0.80, 0.58, 0.87, 0.73, 0.48],
+        "Kimi":     [0.83, 0.62, 0.89, 0.76, 0.40],
+        "Grok":     [0.70, 0.50, 0.82, 0.68, 0.55],
+        "Yuanbao":  [0.84, 0.59, 0.90, 0.74, 0.47],
+        "MiMo":     [0.78, 0.56, 0.86, 0.70, 0.52],
+        "Doubao":   [0.81, 0.61, 0.88, 0.75, 0.49],
+    }
+
+    seat_performance = {
+        "Gemini":   {"correctness": 0.88, "calibration_consistency": 0.82, "rarity_score": 0.15, "replay_count": 45, "demand_score": 0.70},
+        "ChatGPT":  {"correctness": 0.85, "calibration_consistency": 0.78, "rarity_score": 0.12, "replay_count": 52, "demand_score": 0.80},
+        "DeepSeek": {"correctness": 0.90, "calibration_consistency": 0.85, "rarity_score": 0.22, "replay_count": 38, "demand_score": 0.60},
+        "Qwen":     {"correctness": 0.82, "calibration_consistency": 0.75, "rarity_score": 0.10, "replay_count": 30, "demand_score": 0.50},
+        "Kimi":     {"correctness": 0.86, "calibration_consistency": 0.80, "rarity_score": 0.18, "replay_count": 41, "demand_score": 0.65},
+        "Grok":     {"correctness": 0.75, "calibration_consistency": 0.65, "rarity_score": 0.30, "replay_count": 25, "demand_score": 0.55},
+        "Yuanbao":  {"correctness": 0.84, "calibration_consistency": 0.77, "rarity_score": 0.14, "replay_count": 35, "demand_score": 0.60},
+        "MiMo":     {"correctness": 0.80, "calibration_consistency": 0.72, "rarity_score": 0.08, "replay_count": 28, "demand_score": 0.50},
+        "Doubao":   {"correctness": 0.83, "calibration_consistency": 0.76, "rarity_score": 0.11, "replay_count": 33, "demand_score": 0.55},
+    }
+
+    claims = [
+        {k: v for k, v in d.items()}
+        for d in seat_claims.values()
+    ]
+
+    pipeline_result = score_jury_full_pipeline(claims, seat_vectors, seat_performance)
+
+    gv = graph_value_v2(
+        correctness=seat_performance[seat_name]["correctness"],
+        rarity_score=seat_performance[seat_name]["rarity_score"],
+        replay_count=seat_performance[seat_name]["replay_count"],
+        demand_score=seat_performance[seat_name]["demand_score"],
+        calibration_consistency=seat_performance[seat_name]["calibration_consistency"],
+    )
+
+    output = {
+        "seat": seat_name,
+        "provider_metadata": {
+            "model_key": "MiMo",
+            "specialisation": "Chinese long-context reasoning",
+            "prompt_template": "prompts/system/mimo.md",
+        },
+        "evidence": seat_data["claim"],
+        "score_contribution": {
+            "confidence": seat_data["confidence"],
+            "evidence_strength": seat_data["evidence_strength"],
+            "source_authority": seat_data["source_authority"],
+            "graph_value": gv["value"],
+        },
+        "jury_pipeline": pipeline_result,
+    }
+
+    print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
 
 
